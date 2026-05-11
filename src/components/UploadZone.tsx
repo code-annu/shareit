@@ -26,6 +26,73 @@ export default function UploadZone() {
   const [errorMessage, setErrorMessage] = useState("");
   const router = useRouter();
 
+  const uploadToCloudinary = async (f: File) => {
+    const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/video/upload`;
+
+    // Cloudinary recommends chunked uploads for large files (Upload Widget does this automatically).
+    // We'll do a manual chunked upload when the file is large to avoid browser/network flakiness.
+    const CHUNK_SIZE_BYTES = 20 * 1024 * 1024; // 20MB default
+    const shouldChunk = f.size > CHUNK_SIZE_BYTES;
+
+    if (!shouldChunk) {
+      const formData = new FormData();
+      formData.append("file", f);
+      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+      formData.append("resource_type", "video");
+      formData.append("folder", "shareit");
+
+      const res = await axios.post(cloudinaryUrl, formData, {
+        onUploadProgress: (progressEvent) => {
+          const pct = progressEvent.total
+            ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            : 0;
+          setProgress(pct);
+        },
+        timeout: 0,
+      });
+      return res.data;
+    }
+
+    const uploadId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    let start = 0;
+    let finalData: any = null;
+
+    while (start < f.size) {
+      const endExclusive = Math.min(start + CHUNK_SIZE_BYTES, f.size);
+      const endInclusive = endExclusive - 1;
+      const chunk = f.slice(start, endExclusive);
+
+      const formData = new FormData();
+      formData.append("file", chunk);
+      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+      formData.append("resource_type", "video");
+      formData.append("folder", "shareit");
+
+      const res = await axios.post(cloudinaryUrl, formData, {
+        headers: {
+          "Content-Range": `bytes ${start}-${endInclusive}/${f.size}`,
+          "X-Unique-Upload-Id": uploadId,
+        },
+        onUploadProgress: (evt) => {
+          const loaded = evt.loaded || 0;
+          const overallLoaded = Math.min(start + loaded, f.size);
+          setProgress(Math.round((overallLoaded * 100) / f.size));
+        },
+        timeout: 0,
+      });
+
+      // Cloudinary returns the final upload response on the last chunk.
+      finalData = res.data;
+      start = endExclusive;
+    }
+
+    return finalData;
+  };
+
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setErrorMessage("");
     if (acceptedFiles.length === 0) return;
@@ -91,34 +158,8 @@ export default function UploadZone() {
     setErrorMessage("");
 
     try {
-      // Step 1: Upload directly to Cloudinary
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
-      formData.append("resource_type", "video");
-      formData.append("folder", "shareit");
-
-      const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/video/upload`;
-      
-      console.log(`Uploading to: ${cloudinaryUrl}`);
-      console.log(`Using preset: ${CLOUDINARY_UPLOAD_PRESET}`);
-
-      const cloudinaryResponse = await axios.post(
-        cloudinaryUrl,
-        formData,
-        {
-          onUploadProgress: (progressEvent) => {
-            const pct = progressEvent.total
-              ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
-              : 0;
-            setProgress(pct);
-          },
-          // Increase timeout for large files if needed, though network error is usually immediate
-          timeout: 0, 
-        }
-      );
-
-      const cloudData = cloudinaryResponse.data;
+      // Step 1: Upload directly to Cloudinary (chunked for large files)
+      const cloudData = await uploadToCloudinary(file);
 
       // Step 2: Save metadata to our API
       setStatus("saving");
@@ -148,13 +189,18 @@ export default function UploadZone() {
       setStatus("error");
       
       if (axios.isAxiosError(error)) {
+        const msg =
+          error.response?.data?.error?.message ||
+          error.response?.data?.error ||
+          error.message;
+
+        // For very large uploads, some failures come back as network errors (connection reset/blocked),
+        // even though cloud name is correct. Surface a more actionable hint.
         if (error.code === "ERR_NETWORK") {
-          setErrorMessage("Network Error: Could not connect to Cloudinary. Check your internet connection or if the Cloud Name is correct.");
+          setErrorMessage(
+            `Upload failed: network connection dropped during upload. For large files, ensure your Cloudinary plan/preset allows the file size and try again on a stable connection. (${msg})`
+          );
         } else {
-          const msg =
-            error.response?.data?.error?.message ||
-            error.response?.data?.error ||
-            error.message;
           setErrorMessage(`Upload failed: ${msg}`);
         }
       } else if (error instanceof Error) {

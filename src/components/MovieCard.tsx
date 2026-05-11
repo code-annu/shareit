@@ -19,6 +19,14 @@ export default function MovieCard({ movie, onDeleted }: MovieCardProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [imageError, setImageError] = useState(false);
 
+  const getDirectDownloadUrl = (url: string) => {
+    // Cloudinary: force download via `fl_attachment` so it doesn't open the player.
+    if (url.includes("/upload/")) {
+      return url.replace("/upload/", "/upload/fl_attachment/");
+    }
+    return url;
+  };
+
   const handleDelete = async () => {
     setIsDeleting(true);
     try {
@@ -39,10 +47,8 @@ export default function MovieCard({ movie, onDeleted }: MovieCardProps) {
 
   const handleDownload = () => {
     const link = document.createElement("a");
-    link.href = movie.secureUrl;
+    link.href = getDirectDownloadUrl(movie.secureUrl);
     link.download = movie.originalFilename || "movie";
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

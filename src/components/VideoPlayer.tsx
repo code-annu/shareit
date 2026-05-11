@@ -25,6 +25,14 @@ export default function VideoPlayer({ movie }: VideoPlayerProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [showControls, setShowControls] = useState(true);
 
+  const getDirectDownloadUrl = (url: string) => {
+    // Cloudinary: force download via `fl_attachment` so it doesn't open the player.
+    if (url.includes("/upload/")) {
+      return url.replace("/upload/", "/upload/fl_attachment/");
+    }
+    return url;
+  };
+
   const togglePlay = () => {
     if (!videoRef.current) return;
     if (isPlaying) {
@@ -52,10 +60,8 @@ export default function VideoPlayer({ movie }: VideoPlayerProps) {
 
   const handleDownload = () => {
     const link = document.createElement("a");
-    link.href = movie.secureUrl;
+    link.href = getDirectDownloadUrl(movie.secureUrl);
     link.download = movie.originalFilename || "movie";
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
